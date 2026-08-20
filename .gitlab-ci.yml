@@ -2,8 +2,10 @@ stages:
     - build-libvlc
     - build-unity-plugin
     - package
+    - export-unitypackage
 
 variables:
+    UNITY_VERSION: "6000.3.10f1"
     VLC_UWP_LLVM_IMAGE: registry.videolan.org/vlc-debian-llvm-ucrt:20260331112916
     VLC_WIN_LLVM_IMAGE: registry.videolan.org/vlc-debian-llvm-msvcrt:20260331112916
     VLC_DEBIAN_IMAGE: registry.videolan.org/vlc-debian-unstable:20260217105256
@@ -708,3 +710,65 @@ libvlcsharp-ios:
     variables:
         ARGS: /p:UNITY_IOS=true
         BUILD_FOLDER: ios
+
+.export-unitypackage-base:
+    extends: .base-template
+    stage: export-unitypackage
+    image: unityci/editor:ubuntu-${UNITY_VERSION}-base-3
+    cache:
+        key: "unity-library-$CI_JOB_NAME_SLUG-$CI_COMMIT_REF_SLUG"
+        paths:
+            - Library/
+    artifacts:
+        expire_in: 1 week
+    before_script:
+        - mkdir -p /tmp/EmptyProject
+        - |
+          max_retries=5
+          delay=15
+          retry_count=0
+          
+          while [[ $retry_count -lt $max_retries ]]; do
+            if unity-editor -logFile - -quit -batchmode -nographics -serial "$UNITY_SERIAL" -username "$UNITY_EMAIL" -password "$UNITY_PASSWORD" -projectPath /tmp/EmptyProject; then
+              echo "Activation complete."
+              break
+            fi
+            
+            ((retry_count++))
+            if [[ $retry_count -eq $max_retries ]]; then
+              echo "Error: Activation failed after $max_retries retries."
+              exit 1
+            fi
+            
+            echo "Activation failed, attempting retry #$retry_count. Retrying in ${delay}s..."
+            sleep $delay
+            delay=$((delay * 2))
+          done
+    after_script:
+        - unity-editor -logFile - -quit -batchmode -nographics -returnlicense -username "$UNITY_EMAIL" -password "$UNITY_PASSWORD" -projectPath /tmp/EmptyProject || true
+
+export-unitypackage-pro:
+    extends: .export-unitypackage-base
+    dependencies:
+        - package-unity-plugins-pro
+    script:
+        - mkdir -p Assets/VLCUnity/Plugins
+        - cp -r Plugins/* Assets/VLCUnity/Plugins/ || true 
+        - unity-editor -projectPath . -quit -batchmode -nographics -executeMethod VLCUnityPackageExporter.ValidateAndExport -logFile -
+        - mv VLCUnity.unitypackage VLCUnity-Pro.unitypackage
+    artifacts:
+        paths:
+            - VLCUnity-Pro.unitypackage
+
+export-unitypackage-trial:
+    extends: .export-unitypackage-base
+    dependencies:
+        - package-unity-plugins-trial
+    script:
+        - mkdir -p Assets/VLCUnity/Plugins
+        - cp -r Plugins/* Assets/VLCUnity/Plugins/ || true
+        - unity-editor -projectPath . -quit -batchmode -nographics -executeMethod VLCUnityPackageExporter.ValidateAndExport -logFile -
+        - mv VLCUnity.unitypackage VLCUnity-Trial.unitypackage
+    artifacts:
+        paths:
+            - VLCUnity-Trial.unitypackage

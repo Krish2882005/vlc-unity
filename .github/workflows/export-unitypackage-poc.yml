@@ -1,0 +1,36 @@
+name: Export UnityPackage POC
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-unitypackage:
+    name: Export VLCUnity Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download and Extract Plugins
+        run: |
+          mkdir -p Assets/VLCUnity/Plugins
+          wget -O plugins.7z "https://github.com/Krish2882005/vlc-unity/releases/download/poc-test/plugins.7z"
+          7z x plugins.7z -oAssets/VLCUnity/ -y
+          rm plugins.7z
+
+      - name: Export UnityPackage using GameCI
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        with:
+          targetPlatform: StandaloneWindows64
+          buildMethod: VLCUnityPackageExporter.ValidateAndExport
+          versioning: None
+
+      - name: Upload UnityPackage to GitHub Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: VLCUnity-POC
+          path: VLCUnity.unitypackage

@@ -5,32 +5,113 @@ on:
 
 jobs:
   build-unitypackage:
-    name: Export VLCUnity Package
-    runs-on: ubuntu-latest
+    name: Native Unity Build & Export
+    runs-on: windows-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Download and Extract Plugins
+        shell: bash
         run: |
           mkdir -p Assets/VLCUnity/Plugins
-          wget -O plugins.7z "https://github.com/Krish2882005/vlc-unity/releases/download/poc-test/plugins.7z"
+          curl -L -o plugins.7z "https://github.com/Krish2882005/vlc-unity/releases/download/poc-test/plugins.7z"
           7z x plugins.7z -oAssets/VLCUnity/ -y
           rm plugins.7z
 
-      - name: Export UnityPackage using GameCI
-        uses: game-ci/unity-builder@v4
+      - name: Install Unity Hub (Stable)
+        continue-on-error: true
+        shell: pwsh
+        run: winget install Unity.UnityHub --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+
+      - name: Install Unity Editor (6000.3.10f1)
+        shell: pwsh
+        run: |
+          $hubPath = "C:\Program Files\Unity Hub\Unity Hub.exe"
+          $hubArgs = "-- --headless install --version 6000.3.10f1 --changeset e35f0c77bd8e -m standalonewindows64"
+          
+          Write-Host "Downloading and installing Unity 6000.3.10f1 (this will take ~10 minutes)..."
+          
+          $process = Start-Process -FilePath $hubPath -ArgumentList $hubArgs -Wait -NoNewWindow -PassThru
+          
+          if ($process.ExitCode -ne 0) { 
+            Write-Error "Unity Editor install failed with exit code $($process.ExitCode)."
+            exit 1 
+          }
+          
+          Write-Host "Installation complete. Verifying..."
+          Start-Process -FilePath $hubPath -ArgumentList "-- --headless editors --installed" -Wait -NoNewWindow
+
+      - name: Activate Unity Pro License (Seat-Based)
+        shell: pwsh
         env:
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        with:
-          targetPlatform: StandaloneWindows64
-          buildMethod: VLCUnityPackageExporter.ValidateAndExport
-          versioning: None
+        run: |
+          $unityExe = "C:\Program Files\Unity\Hub\Editor\6000.3.10f1\Editor\Unity.exe"
+          
+          $activateArgs = "-batchmode -quit -nographics -logFile - -serial -username `"$env:UNITY_EMAIL`" -password `"$env:UNITY_PASSWORD`""
+          
+          Write-Host "Applying Unity Pro Seat Entitlement..."
+          $process = Start-Process -FilePath $unityExe -ArgumentList $activateArgs -Wait -NoNewWindow -PassThru
+          
+          if ($process.ExitCode -ne 0) {
+            Write-Error "Activation failed with code $($process.ExitCode)"
+            exit $process.ExitCode
+          }
+          Write-Host "Activation Successful."
 
-      - name: Upload UnityPackage to GitHub Artifacts
+      - name: Run Unity Tests
+        shell: pwsh
+        run: |
+          $unityExe = "C:\Program Files\Unity\Hub\Editor\6000.3.10f1\Editor\Unity.exe"
+          $testArgs = "-batchmode -projectPath . -runTests -testPlatform PlayMode -testResults TestResults.xml -logFile - -force-driver-type-warp"
+          
+          Write-Host "Running EditMode tests..."
+          
+          $process = Start-Process -FilePath $unityExe -ArgumentList $testArgs -Wait -NoNewWindow -PassThru
+          
+          if ($process.ExitCode -ne 0) { 
+            Write-Error "Unity Tests failed with exit code $($process.ExitCode)!"
+            exit $process.ExitCode 
+          }
+
+      - name: Export UnityPackage
+        shell: pwsh
+        run: |
+          $unityExe = "C:\Program Files\Unity\Hub\Editor\6000.3.10f1\Editor\Unity.exe"
+          $exportArgs = "-quit -batchmode -projectPath . -executeMethod VLCUnityPackageExporter.ValidateAndExport -logFile - -force-driver-type-warp"
+          
+          Write-Host "Executing VLCUnityPackageExporter.ValidateAndExport..."
+          
+          $process = Start-Process -FilePath $unityExe -ArgumentList $exportArgs -Wait -NoNewWindow -PassThru
+          
+          if ($process.ExitCode -ne 0) { 
+            Write-Error "Package export failed with exit code $($process.ExitCode)!"
+            exit $process.ExitCode 
+          }
+
+      - name: Return Unity License
+        if: always()
+        shell: pwsh
+        env:
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        run: |
+          $unityExe = "C:\Program Files\Unity\Hub\Editor\6000.3.10f1\Editor\Unity.exe"
+          
+          $returnArgs = "-batchmode -quit -nographics -returnlicense -username `"$env:UNITY_EMAIL`" -password `"$env:UNITY_PASSWORD`" -logFile -"
+          
+          Write-Host "Returning Unity Pro License Seat..."
+          Start-Process -FilePath $unityExe -ArgumentList $returnArgs -Wait -NoNewWindow
+          
+          Write-Host "Seat returned successfully."
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: VLCUnity-POC
-          path: VLCUnity.unitypackage
+          path: |
+            VLCUnity.unitypackage
+            TestResults*.xml
